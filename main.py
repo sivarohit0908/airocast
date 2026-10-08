@@ -54,23 +54,17 @@ try:
             params={
                 "latitude": place["latitude"],
                 "longitude": place["longitude"],
-                "current": (
-                    "temperature_2m,"
-                    "relative_humidity_2m,"
-                    "wind_speed_10m,"
-                    "wind_direction_10m"
-                ),
+                "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m",
                 "timezone": "auto",
             },
         )
         weather_response.raise_for_status()
-        weather_data = weather_response.json()
-        current = weather_data.get("current")
+        current = weather_response.json().get("current")
 
         if not current:
             raise HTTPException(
                 status_code=502,
-                detail="Weather data was not returned by the provider.",
+                detail="Weather provider returned no current data.",
             )
 
         return {
@@ -108,13 +102,14 @@ except httpx.TimeoutException:
 except httpx.HTTPStatusError as exc:
     raise HTTPException(
         status_code=502,
-        detail=f"External data provider returned HTTP {exc.response.status_code}.",
+        detail=f"External provider returned HTTP {exc.response.status_code}.",
     )
 except (httpx.RequestError, ValueError):
     raise HTTPException(
         status_code=502,
-        detail="Could not retrieve data from the external weather service.",
+        detail="Could not retrieve data from the weather service.",
     )
 ```
+
 
 
