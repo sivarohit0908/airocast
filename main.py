@@ -46,7 +46,7 @@ async def analyze(location: str):
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            # Find the requested location.
+            # Step 1: Find the location.
             geo_response = await client.get(
                 "https://geocoding-api.open-meteo.com/v1/search",
                 params={
@@ -57,21 +57,21 @@ async def analyze(location: str):
                 },
             )
             geo_response.raise_for_status()
-            geo_data = geo_response.json()
 
+            geo_data = geo_response.json()
             results = geo_data.get("results", [])
 
             if not results:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Location '{location}' was not found. Try another city name.",
+                    detail=f"Location '{location}' was not found. Try another city.",
                 )
 
             place = results[0]
             latitude = place["latitude"]
             longitude = place["longitude"]
 
-            # Get current weather for that location.
+            # Step 2: Get current weather.
             weather_response = await client.get(
                 "https://api.open-meteo.com/v1/forecast",
                 params={
@@ -87,15 +87,17 @@ async def analyze(location: str):
                 },
             )
             weather_response.raise_for_status()
+
             weather_data = weather_response.json()
             current = weather_data.get("current")
 
             if not current:
                 raise HTTPException(
                     status_code=502,
-                    detail="The weather service returned no current weather data.",
+                    detail="The weather service returned no current data.",
                 )
 
+            # Step 3: Return data for the website.
             return {
                 "status": "success",
                 "location": {
@@ -121,27 +123,31 @@ async def analyze(location: str):
                 },
             }
 
-                 }
-
     except HTTPException:
         raise
 
     except httpx.TimeoutException:
         raise HTTPException(
             status_code=504,
-            detail="The weather service took too long to respond. Please try again.",
+            detail="The weather service timed out. Please try again.",
         )
 
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 429:
             raise HTTPException(
                 status_code=503,
-                detail="Weather service rate limit reached. Wait a few minutes and try again.",
+                detail=(
+                    "The weather service is temporarily rate-limited. "
+                    "Please wait a few minutes and try again."
+                ),
             )
 
         raise HTTPException(
             status_code=502,
-            detail=f"An external weather service returned HTTP {exc.response.status_code}.",
+            detail=(
+                "An external weather service returned HTTP "
+                f"{exc.response.status_code}."
+            ),
         )
 
     except (httpx.RequestError, ValueError, KeyError):
@@ -150,11 +156,13 @@ async def analyze(location: str):
             detail="Could not retrieve location or weather data. Please try again.",
         )
 
+
 if __name__ == "__main__":
     import os
     import uvicorn
 
     port = int(os.environ.get("PORT", "8000"))
+
     uvicorn.run(
         app,
         host="0.0.0.0",
