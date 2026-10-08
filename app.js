@@ -1,13 +1,24 @@
+// ==========================================
+// AIROCAST - FRONTEND JAVASCRIPT
+// ==========================================
+
+// 🔴 REPLACE THIS with your Render backend URL
+const BACKEND_URL = "YOUR-RENDER-URL-HERE";
+
+
+// ------------------------------------------
+// GET HTML ELEMENTS
+// ------------------------------------------
+
 const analyzeButton = document.getElementById("analyzeBtn");
 const locationInput = document.getElementById("locationInput");
 const currentLocationButton = document.getElementById("currentLocationBtn");
-
 const dashboard = document.getElementById("dashboard");
 
 
-// ==========================================
+// ------------------------------------------
 // ANALYZE LOCATION
-// ==========================================
+// ------------------------------------------
 
 analyzeButton.addEventListener("click", async () => {
 
@@ -23,35 +34,27 @@ analyzeButton.addEventListener("click", async () => {
 
     try {
 
-        // Backend URL will be added after deployment.
-        // For now, this is only a placeholder.
-        const BACKEND_URL = "YOUR_BACKEND_URL";
-
-        if (BACKEND_URL === "YOUR_BACKEND_URL") {
-            alert(
-                "Frontend is ready! Backend deployment is the next step."
-            );
-            return;
-        }
-
         const response = await fetch(
             `${BACKEND_URL}/api/analyze?location=${encodeURIComponent(location)}`
         );
 
         if (!response.ok) {
-            throw new Error("Backend request failed.");
+            throw new Error("Backend request failed");
         }
 
         const data = await response.json();
+
+        console.log("AIROCAST RESPONSE:", data);
 
         displayResults(data);
 
     } catch (error) {
 
-        console.error(error);
+        console.error("AIROCAST ERROR:", error);
 
         alert(
-            "Unable to connect to AIROCAST backend."
+            "Unable to connect to AIROCAST.\n\n" +
+            "Please check that the backend is running."
         );
 
     } finally {
@@ -60,126 +63,282 @@ analyzeButton.addEventListener("click", async () => {
         analyzeButton.textContent = "Analyze";
 
     }
+
 });
 
 
-// ==========================================
+// ------------------------------------------
 // DISPLAY RESULTS
-// ==========================================
+// ------------------------------------------
 
 function displayResults(data) {
 
+    if (!dashboard) {
+        console.error("Dashboard element not found.");
+        return;
+    }
+
     dashboard.style.display = "block";
 
-    console.log("AIROCAST DATA:", data);
 
-    // Current PM2.5
+    // PM2.5
     const pm25Element = document.getElementById("pm25");
 
     if (pm25Element) {
-        pm25Element.textContent =
-            data.pollution?.pm25 ?? "--";
+
+        if (data.pollution && data.pollution.pm25 !== null) {
+            pm25Element.textContent = data.pollution.pm25;
+        } else {
+            pm25Element.textContent = "--";
+        }
+
     }
+
 
     // Temperature
-    const temperatureElement =
-        document.getElementById("temperature");
+    const temperatureElement = document.getElementById("temperature");
 
     if (temperatureElement) {
-        temperatureElement.textContent =
-            data.weather?.temperature
-            ? `${data.weather.temperature}°C`
-            : "--";
+
+        if (
+            data.weather &&
+            data.weather.temperature !== null &&
+            data.weather.temperature !== undefined
+        ) {
+            temperatureElement.textContent =
+                `${data.weather.temperature}°C`;
+        } else {
+            temperatureElement.textContent = "--";
+        }
+
     }
+
 
     // Humidity
-    const humidityElement =
-        document.getElementById("humidity");
+    const humidityElement = document.getElementById("humidity");
 
     if (humidityElement) {
-        humidityElement.textContent =
-            data.weather?.humidity
-            ? `${data.weather.humidity}%`
-            : "--";
+
+        if (
+            data.weather &&
+            data.weather.humidity !== null &&
+            data.weather.humidity !== undefined
+        ) {
+            humidityElement.textContent =
+                `${data.weather.humidity}%`;
+        } else {
+            humidityElement.textContent = "--";
+        }
+
     }
+
 
     // Wind
-    const windElement =
-        document.getElementById("wind");
+    const windElement = document.getElementById("wind");
 
     if (windElement) {
-        windElement.textContent =
-            data.weather?.wind_speed
-            ? `${data.weather.wind_speed} km/h`
-            : "--";
+
+        if (
+            data.weather &&
+            data.weather.wind_speed !== null &&
+            data.weather.wind_speed !== undefined
+        ) {
+            windElement.textContent =
+                `${data.weather.wind_speed} km/h`;
+        } else {
+            windElement.textContent = "--";
+        }
+
     }
+
+
+    // Location information
+    if (data.location) {
+
+        console.log(
+            "Location:",
+            data.location.name,
+            data.location.country
+        );
+
+    }
+
+
+    // Prediction
+    const predictionElement =
+        document.getElementById("prediction");
+
+    if (predictionElement) {
+
+        if (
+            data.prediction &&
+            data.prediction.forecast_30_60_min !== null
+        ) {
+
+            predictionElement.textContent =
+                data.prediction.forecast_30_60_min;
+
+        } else {
+
+            predictionElement.textContent =
+                "Coming soon";
+
+        }
+
+    }
+
+
+    console.log("AIROCAST dashboard updated.");
+
 }
 
 
-// ==========================================
-// USE CURRENT LOCATION
-// ==========================================
+// ------------------------------------------
+// CURRENT LOCATION
+// ------------------------------------------
 
-currentLocationButton.addEventListener(
-    "click",
-    () => {
+currentLocationButton.addEventListener("click", () => {
 
-        if (!navigator.geolocation) {
+    if (!navigator.geolocation) {
 
-            alert(
-                "Your browser does not support location services."
+        alert(
+            "Your browser does not support location services."
+        );
+
+        return;
+    }
+
+
+    currentLocationButton.disabled = true;
+    currentLocationButton.textContent = "Getting location...";
+
+
+    navigator.geolocation.getCurrentPosition(
+
+        async (position) => {
+
+            const latitude = position.coords.latitude;
+            const longitude = position.coords.longitude;
+
+            console.log(
+                "Current coordinates:",
+                latitude,
+                longitude
             );
 
-            return;
+
+            try {
+
+                // Reverse geocode coordinates
+                const response = await fetch(
+                    `https://geocoding-api.open-meteo.com/v1/reverse?latitude=${latitude}&longitude=${longitude}&count=1&language=en&format=json`
+                );
+
+
+                if (!response.ok) {
+                    throw new Error(
+                        "Could not determine location"
+                    );
+                }
+
+
+                const data = await response.json();
+
+
+                if (
+                    data.results &&
+                    data.results.length > 0
+                ) {
+
+                    const place = data.results[0];
+
+                    locationInput.value =
+                        place.name || "Current location";
+
+
+                    // Automatically analyze
+                    analyzeButton.click();
+
+                } else {
+
+                    alert(
+                        "Could not determine your location name."
+                    );
+
+                }
+
+            } catch (error) {
+
+                console.error(
+                    "Location error:",
+                    error
+                );
+
+                alert(
+                    "Could not determine your current location."
+                );
+
+            } finally {
+
+                currentLocationButton.disabled = false;
+
+                currentLocationButton.textContent =
+                    "Use my current location";
+
+            }
+
+        },
+
+
+        (error) => {
+
+            console.error(
+                "Geolocation error:",
+                error
+            );
+
+            alert(
+                "Unable to access your location.\n\n" +
+                "Please allow location access in your browser."
+            );
+
+
+            currentLocationButton.disabled = false;
+
+            currentLocationButton.textContent =
+                "Use my current location";
+
         }
 
-        currentLocationButton.textContent =
-            "Getting location...";
+    );
 
-        navigator.geolocation.getCurrentPosition(
+});
 
-            (position) => {
 
-                const latitude =
-                    position.coords.latitude;
+// ------------------------------------------
+// ENTER KEY SUPPORT
+// ------------------------------------------
 
-                const longitude =
-                    position.coords.longitude;
+locationInput.addEventListener("keydown", (event) => {
 
-                console.log(
-                    "User coordinates:",
-                    latitude,
-                    longitude
-                );
+    if (event.key === "Enter") {
 
-                alert(
-                    `Location detected!\n\nLatitude: ${latitude}\nLongitude: ${longitude}\n\nLocation API connection will be added next.`
-                );
+        analyzeButton.click();
 
-                currentLocationButton.textContent =
-                    "Use my current location";
-            },
-
-            (error) => {
-
-                console.error(error);
-
-                alert(
-                    "Unable to access your location."
-                );
-
-                currentLocationButton.textContent =
-                    "Use my current location";
-            }
-        );
     }
-);
+
+});
 
 
-// ==========================================
-// PAGE LOAD
-// ==========================================
+// ------------------------------------------
+// STARTUP MESSAGE
+// ------------------------------------------
 
 console.log(
-    "AIROCAST frontend loaded successfully."
+    "🌍 AIROCAST frontend loaded successfully."
+);
+
+console.log(
+    "🚀 Backend:",
+    BACKEND_URL
 );
