@@ -1,17 +1,14 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
+import os
+import uvicorn
 
-app = FastAPI(
-    title="AIROCAST API",
-    version="1.0.0",
-)
+app = FastAPI(title="AIROCAST API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://sivarohit0908.github.io",
-    ],
+    allow_origins=["https://sivarohit0908.github.io"],
     allow_credentials=False,
     allow_methods=["GET"],
     allow_headers=["*"],
@@ -46,7 +43,8 @@ async def analyze(location: str):
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            # Step 1: Find the location.
+
+            # 1. Find the city coordinates.
             geo_response = await client.get(
                 "https://geocoding-api.open-meteo.com/v1/search",
                 params={
@@ -58,46 +56,85 @@ async def analyze(location: str):
             )
             geo_response.raise_for_status()
 
-            geo_data = geo_response.json()
-            results = geo_data.get("results", [])
+            results = geo_response.json().get("results", [])
 
             if not results:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Location '{location}' was not found. Try another city.",
+                    detail=f"Location '{location}' was not found.",
                 )
 
             place = results[0]
             latitude = place["latitude"]
             longitude = place["longitude"]
 
-            # Step 2: Get current weather.
-            weather_response = await client.get(
-                "https://api.open-meteo.com/v1/forecast",
+            # 2. Get air quality from the dedicated API.
+            air_response = await client.get(
+                "https://air-quality-api.open-meteo.com/v1/air-quality",
                 params={
                     "latitude": latitude,
                     "longitude": longitude,
-                    "current": (
-                        "temperature_2m,"
-                        "relative_humidity_2m,"
-                        "wind_speed_10m,"
-                        "wind_direction_10m"
-                    ),
+                    "current": "pm2_5,pm10,us_aqi",
                     "timezone": "auto",
                 },
             )
-            weather_response.raise_for_status()
+            air_response.raise_for_status()
 
-            weather_data = weather_response.json()
-            current = weather_data.get("current")
+            air_data = air_response.json()
+            air_current = air_data.get("current")
 
-            if not current:
+            if not air_current:
                 raise HTTPException(
                     status_code=502,
-                    detail="The weather service returned no current data.",
+                    detail="The air-quality service returned no current data.",
                 )
 
-            # Step 3: Return data for the website.
+            # 3. Weather is optional: pollution data can still be returned
+            # if the weather endpoint is temporarily rate-limited.
+            weather = {
+                "temperature": None,
+                "humidity": None,
+                "wind_speed": None,
+                "wind_direction": None,
+            }
+            weather_status = "Weather data is temporarily unavailable."
+
+            try:
+                weather_response = await client.get(
+                    "https://api.open-meteo.com/v1/forecast",
+                    params={
+                        "latitude": latitude,
+                        "longitude": longitude,
+                        "current": (
+                            "temperature_2m,"
+                            "relative_humidity_2m,"
+                            "wind_speed_10m,"
+                            "wind_direction_10m"
+                        ),
+                        "timezone": "auto",
+                    },
+                )
+                weather_response.raise_for_status()
+
+                weather_current = weather_response.json().get("current")
+
+                if weather_current:
+                    weather = {
+                        "temperature": weather_current.get("temperature_2m"),
+                        "humidity": weather_current.get(
+                            "relative_humidity_2m"
+                        ),
+                        "wind_speed": weather_current.get("wind_speed_10m"),
+                        "wind_direction": weather_current.get(
+                            "wind_direction_10m"
+                        ),
+                    }
+                    weather_status = "success"
+
+            except httpx.HTTPError:
+                pass
+
+            # 4. Return the dashboard data.
             return {
                 "status": "success",
                 "location": {
@@ -107,20 +144,26 @@ async def analyze(location: str):
                     "latitude": latitude,
                     "longitude": longitude,
                 },
-                "weather": {
-                    "temperature": current.get("temperature_2m"),
-                    "humidity": current.get("relative_humidity_2m"),
-                    "wind_speed": current.get("wind_speed_10m"),
-                    "wind_direction": current.get("wind_direction_10m"),
-                },
+                "weather": weather,
+                "weather_status": weather_status,
                 "pollution": {
-                    "pm25": None,
-                    "status": "PM2.5 data is not connected yet.",
+                    "pm25": air_current.get("pm2_5"),
+                    "pm10": air_current.get("pm10"),
+                    "us_aqi": air_current.get("us_aqi"),
+                    "unit": "µg/m³",
+                    "status": "success",
+                    "source": "Open-Meteo Air Quality API",
                 },
                 "prediction": {
                     "forecast_30_60_min": None,
-                    "status": "AI pollution prediction is not connected yet.",
+                    "status": (
+                        "AI prediction model is not connected yet."
+                    ),
                 },
+                "data_attribution": (
+                    "Air quality: Open-Meteo / Copernicus CAMS. "
+                    "Weather: Open-Meteo."
+                ),
             }
 
     except HTTPException:
@@ -129,7 +172,7 @@ async def analyze(location: str):
     except httpx.TimeoutException:
         raise HTTPException(
             status_code=504,
-            detail="The weather service timed out. Please try again.",
+            detail="A data service timed out. Please try again shortly.",
         )
 
     except httpx.HTTPStatusError as exc:
@@ -137,7 +180,7 @@ async def analyze(location: str):
             raise HTTPException(
                 status_code=503,
                 detail=(
-                    "The weather service is temporarily rate-limited. "
+                    "The location or air-quality service is rate-limited. "
                     "Please wait a few minutes and try again."
                 ),
             )
@@ -145,7 +188,7 @@ async def analyze(location: str):
         raise HTTPException(
             status_code=502,
             detail=(
-                "An external weather service returned HTTP "
+                "An external data service returned HTTP "
                 f"{exc.response.status_code}."
             ),
         )
@@ -153,20 +196,12 @@ async def analyze(location: str):
     except (httpx.RequestError, ValueError, KeyError):
         raise HTTPException(
             status_code=502,
-            detail="Could not retrieve location or weather data. Please try again.",
+            detail="Could not retrieve location or pollution data. Try again.",
         )
 
 
 if __name__ == "__main__":
-    import os
-    import uvicorn
-
     port = int(os.environ.get("PORT", "8000"))
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-    )
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 
