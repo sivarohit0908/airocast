@@ -3,7 +3,7 @@
 // ==========================================
 
 // 🔴 PUT YOUR RENDER URL HERE
-const BACKEND_URL = "YOUR-RENDER-URL-HERE";
+const BACKEND_URL = "https://airocast-api.onrender.com";
 
 
 // ==========================================
