@@ -121,6 +121,8 @@ async def analyze(location: str):
                 },
             }
 
+                 }
+
     except HTTPException:
         raise
 
@@ -131,6 +133,12 @@ async def analyze(location: str):
         )
 
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            raise HTTPException(
+                status_code=503,
+                detail="Weather service rate limit reached. Wait a few minutes and try again.",
+            )
+
         raise HTTPException(
             status_code=502,
             detail=f"An external weather service returned HTTP {exc.response.status_code}.",
@@ -141,7 +149,6 @@ async def analyze(location: str):
             status_code=502,
             detail="Could not retrieve location or weather data. Please try again.",
         )
-
 
 if __name__ == "__main__":
     import os
