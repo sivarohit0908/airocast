@@ -3,211 +3,110 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07120f">
-  <meta name="description" content="AIROCAST tracks current air quality and estimates short-term pollution trends.">
-  <title>AIROCAST — Know the air</title>
-
+  <title>AIROCAST</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
-
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <script src="app.js" defer></script>
 </head>
-
 <body>
   <header class="topbar">
-    <a class="brand" href="#" aria-label="AIROCAST home">
-      <span class="brand-mark">A</span>
-      <span>AIROCAST<span class="brand-dot">.</span></span>
-    </a>
-    <span class="live-indicator"><span class="live-dot"></span> AIR INTELLIGENCE</span>
+    <a class="brand" href="#">AIROCAST<span>.</span></a>
+    <span class="live"><i></i> LIVE AIR</span>
   </header>
 
-  <main class="page-shell">
+  <main class="container">
     <section class="hero">
-      <p class="eyebrow">YOUR CITY. YOUR AIR. YOUR NEXT MOVE.</p>
-      <h1>Know the air.<br><span>Predict what comes next.</span></h1>
-      <p class="hero-copy">
-        Explore current pollution levels and see how air quality may change
-        over the next hour.
-      </p>
+      <p class="eyebrow">BREATHE WITH AWARENESS</p>
+      <h1>Know your air<span>.</span><br>See what’s next.</h1>
 
-      <form id="searchForm" class="search-form">
-        <label class="sr-only" for="locationInput">Enter a city</label>
-        <span class="search-symbol" aria-hidden="true">⌕</span>
-        <input id="locationInput" name="location" type="text"
-          placeholder="Enter a city, e.g. Hyderabad"
-          value="Hyderabad" autocomplete="off" required>
-        <button id="analyzeBtn" type="submit">
-          <span>Analyze air</span><span aria-hidden="true"> ↗</span>
-        </button>
+      <form id="searchForm" class="search">
+        <input id="locationInput" aria-label="City" value="Hyderabad" placeholder="Enter city" required>
+        <button id="analyzeBtn" type="submit">Check air ↗</button>
       </form>
-
-      <button id="currentLocationBtn" class="location-button" type="button">
-        ◎ Use my current location
-      </button>
-      <p id="statusMessage" class="status-message" role="status" aria-live="polite">
-        Preparing your air-quality dashboard…
-      </p>
+      <button id="currentLocationBtn" class="location" type="button">◎ Use my location</button>
+      <p id="statusMessage" class="status" role="status" aria-live="polite">Loading…</p>
     </section>
 
-    <section id="dashboard" class="dashboard" hidden>
-      <div class="section-rule"></div>
-
-      <div class="dashboard-heading">
+    <section id="dashboard" hidden>
+      <div class="city-row">
         <div>
-          <p class="eyebrow">LIVE CITY REPORT</p>
+          <p class="eyebrow">YOUR CITY</p>
           <h2 id="locationName">Hyderabad</h2>
-          <p id="updatedAt" class="muted">Loading latest data…</p>
+          <p id="updatedAt" class="muted"></p>
         </div>
-        <div id="aqiBadge" class="aqi-badge" data-level="unknown">
-          <span class="badge-dot"></span>
-          <span id="aqiLabel">Checking air quality</span>
+        <div id="aqiBadge" class="badge" data-level="unknown">
+          <span id="aqiLabel">AQI</span>
         </div>
       </div>
 
-      <div class="metrics-grid">
-        <article class="metric-card metric-primary">
-          <p class="metric-label">PM2.5 <span>●</span></p>
-          <div class="metric-number"><span id="pm25">—</span></div>
-          <p class="metric-unit">μg/m³ · Fine particles</p>
-          <p class="metric-foot">Small particles that can enter deep into the lungs.</p>
-        </article>
-
-        <article class="metric-card">
-          <p class="metric-label">US AIR QUALITY INDEX</p>
-          <div class="metric-number"><span id="aqi">—</span></div>
-          <p class="metric-unit">US AQI · Higher means worse air</p>
-          <p class="metric-foot" id="aqiFoot">Based on available air-quality data.</p>
-        </article>
-
-        <article class="metric-card">
-          <p class="metric-label">PM10</p>
-          <div class="metric-number"><span id="pm10">—</span></div>
-          <p class="metric-unit">μg/m³ · Coarser particles</p>
-          <p class="metric-foot">Includes dust and other inhalable particles.</p>
-        </article>
-
-        <article class="metric-card weather-metric">
-          <p class="metric-label">CURRENT TEMPERATURE</p>
-          <div class="metric-number"><span id="temperature">—</span><span class="degree">°C</span></div>
-          <p id="weatherDescription" class="metric-unit">Loading weather…</p>
-          <p id="feelsLike" class="metric-foot">Feels like —°C</p>
-        </article>
-      </div>
-
-      <section class="forecast-section">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">FORECAST</p>
-            <h2>Your air, hour by hour.</h2>
-            <p class="muted">Forecast PM2.5 concentration over the next 24 hours.</p>
-          </div>
-          <span class="forecast-tag">NEXT 24 HOURS</span>
-        </div>
-
-        <div class="chart-card">
-          <div class="chart-legend">
-            <span class="legend-dot"></span>
-            PM2.5 forecast <span class="legend-unit">μg/m³</span>
-          </div>
-          <div class="chart-wrap">
-            <canvas id="forecastChart" role="img"
-              aria-label="Hourly PM2.5 air-quality forecast chart"></canvas>
-          </div>
-        </div>
-      </section>
-
-      <section class="short-outlook">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">SHORT-TERM OUTLOOK</p>
-            <h2>What happens next?</h2>
-            <p class="muted">An estimate of how particulate pollution may change.</p>
-          </div>
-          <span class="forecast-tag">30–60 MIN</span>
-        </div>
-
-        <div class="outlook-grid">
-          <article class="outlook-card">
-            <p class="outlook-period">IN 30 MINUTES</p>
-            <div class="outlook-value" id="pm25Thirty">—</div>
-            <p class="outlook-unit">Estimated PM2.5 · μg/m³</p>
-            <div class="outlook-trend" id="trendThirty">Waiting for forecast data</div>
-            <p class="outlook-change" id="changeThirty"></p>
-          </article>
-
-          <article class="outlook-card">
-            <p class="outlook-period">IN 1 HOUR</p>
-            <div class="outlook-value" id="pm25Sixty">—</div>
-            <p class="outlook-unit">Forecast PM2.5 · μg/m³</p>
-            <div class="outlook-trend" id="trendSixty">Waiting for forecast data</div>
-            <p class="outlook-change" id="changeSixty"></p>
-          </article>
-        </div>
-
-        <p class="outlook-disclaimer">
-          The 30-minute estimate is derived from hourly forecast data.
-          These are model estimates, not guaranteed local measurements.
-        </p>
-      </section>
-
-      <section class="conditions-section">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">OUTSIDE RIGHT NOW</p>
-            <h2>Weather conditions.</h2>
-          </div>
-        </div>
-
-        <div class="conditions-card">
-          <div class="weather-summary">
-            <div id="weatherIcon" class="weather-icon" aria-hidden="true">☀</div>
-            <div>
-              <div id="weatherTempLarge" class="weather-temp">—°</div>
-              <p id="weatherDescriptionLarge" class="muted">Loading weather…</p>
-            </div>
-          </div>
-          <div class="weather-detail">
-            <span class="detail-label">HUMIDITY</span>
-            <strong id="humidity">—</strong>
-          </div>
-          <div class="weather-detail">
-            <span class="detail-label">WIND SPEED</span>
-            <strong id="wind">—</strong>
-          </div>
-          <div class="weather-detail">
-            <span class="detail-label">FEELS LIKE</span>
-            <strong id="feelsLikeSide">—°C</strong>
-          </div>
-        </div>
-      </section>
-
-      <section class="guidance-section">
-        <div class="guidance-icon" aria-hidden="true">✳</div>
+      <div class="current-card">
         <div>
-          <p class="eyebrow">PRACTICAL GUIDANCE</p>
-          <h2>What should you do?</h2>
-          <p id="guidance">Guidance will appear when data loads.</p>
+          <p class="eyebrow">CURRENT PM2.5</p>
+          <div class="big-number"><span id="pm25">—</span><small>μg/m³</small></div>
+        </div>
+        <div class="current-side">
+          <p class="muted">US AQI</p>
+          <strong id="aqi">—</strong>
+          <p class="muted">PM10 <span id="pm10">—</span></p>
+        </div>
+      </div>
+
+      <section class="outlook">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">SHORT-TERM FORECAST</p>
+            <h2>What happens next?</h2>
+          </div>
+        </div>
+
+        <div class="forecast-grid">
+          <article class="forecast-card">
+            <p class="period">NEXT 30 MIN</p>
+            <div class="forecast-number" id="pm25Thirty">—</div>
+            <p class="unit">PM2.5 · μg/m³</p>
+            <p class="trend" id="trendThirty">Waiting for data</p>
+          </article>
+          <article class="forecast-card">
+            <p class="period">NEXT 1 HOUR</p>
+            <div class="forecast-number" id="pm25Sixty">—</div>
+            <p class="unit">PM2.5 · μg/m³</p>
+            <p class="trend" id="trendSixty">Waiting for data</p>
+          </article>
+        </div>
+        <p class="footnote">Short-term estimates based on hourly forecasts.</p>
+      </section>
+
+      <section class="chart-section">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">UPCOMING HOURS</p>
+            <h2>Air quality trend</h2>
+          </div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-wrap"><canvas id="forecastChart"></canvas></div>
         </div>
       </section>
 
-      <p id="dataNote" class="data-note">
-        Weather and air-quality data may use different update times.
-      </p>
+      <section class="weather-row">
+        <div class="weather-icon" id="weatherIcon">☀</div>
+        <div class="weather-main">
+          <strong id="temperature">—°C</strong>
+          <p id="weatherDescription" class="muted">Weather</p>
+        </div>
+        <div class="weather-detail"><span>Humidity</span><strong id="humidity">—</strong></div>
+        <div class="weather-detail"><span>Wind</span><strong id="wind">—</strong></div>
+      </section>
+
+      <p id="guidance" class="guidance"></p>
+      <p id="dataNote" class="footnote"></p>
     </section>
   </main>
 
-  <footer class="site-footer">
-    <a class="brand footer-brand" href="#">
-      <span class="brand-mark">A</span>
-      <span>AIROCAST<span class="brand-dot">.</span></span>
-    </a>
-    <p>Understand today. Prepare for the next hour.</p>
-    <p class="footer-note">Forecasts are estimates and may differ from actual conditions.</p>
-  </footer>
+  <footer>AIROCAST<span>.</span> <small>Air awareness, made simple.</small></footer>
 </body>
 </html>
