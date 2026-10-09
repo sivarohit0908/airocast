@@ -30,9 +30,19 @@ if (analyzeButton) {
 setText("dataStatus", "Loading live pollution and weather data...");
 
 try {
-    const response = await fetch(
-        `${BACKEND_URL}/api/analyze?location=${encodeURIComponent(location)}`
+   const controller = new AbortController();
+const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+let response;
+
+try {
+    response = await fetch(
+        `${BACKEND_URL}/api/analyze?location=${encodeURIComponent(location)}`,
+        { signal: controller.signal }
     );
+} finally {
+    clearTimeout(timeoutId);
+}
 
     const data = await response.json();
 
