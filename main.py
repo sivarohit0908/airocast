@@ -1,4 +1,5 @@
 
+import asyncio
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -9,11 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="AIROCAST API",
-    description="Weather and air-quality data powered by Open-Meteo.",
-    version="2.0.0",
+    description="Weather by OpenWeather and air quality by Open-Meteo.",
+    version="2.1.0",
 )
 
-# GitHub Pages frontend + local development.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -26,38 +26,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-TIMEOUT = httpx.Timeout(15.0, connect=8.0)
+TIMEOUT = httpx.Timeout(20.0, connect=8.0)
 
-WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
-AIR_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
+OPENWEATHER_URL = "https://api.openweathermap.org/data/2.5/weather"
+AIR_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
 
-async def get_json(
-    client: httpx.AsyncClient,
-    url: str,
-    params: dict[str, Any],
-) -> dict[str, Any]:
+async def get_json(client, url, params, service):
     try:
         response = await client.get(url, params=params)
         response.raise_for_status()
         return response.json()
+    except httpx.HTTPStatusError as exc:
+        if service == "OpenWeather" and exc.response.status_code == 401:
+            raise HTTPException(
+                status_code=503,
+                detail="OpenWeather rejected the API key. Check OPENWEATHER_API_KEY in Render.",
+            ) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=f"{service} returned an error. Please try again shortly.",
+        ) from exc
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(
             status_code=502,
-            detail="An Open-Meteo data service is temporarily unavailable.",
+            detail=f"Could not retrieve data from {service}.",
         ) from exc
-
-
-def value_at(data: dict, key: str, index: int = 0):
-    values = data.get("hourly", {}).get(key) or []
-    return values[index] if len(values) > index else None
 
 
 def aqi_label(aqi):
     if aqi is None:
         return {"label": "Unavailable", "level": "unknown"}
-
     if aqi <= 50:
         return {"label": "Good", "level": "good"}
     if aqi <= 100:
@@ -76,29 +76,14 @@ def aqi_label(aqi):
 
 def build_guidance(aqi, pm25):
     if aqi is None and pm25 is None:
-        return (
-            "Air-quality guidance is unavailable because the required "
-            "data could not be retrieved."
-        )
+        return "Air-quality guidance is unavailable because data could not be retrieved."
     if aqi is not None and aqi > 150:
-        return (
-            "Consider limiting prolonged or strenuous outdoor activity. "
-            "Sensitive groups should take extra care."
-        )
+        return "Consider limiting prolonged or strenuous outdoor activity. Sensitive groups should take extra care."
     if aqi is not None and aqi > 100:
-        return (
-            "Sensitive groups may want to reduce prolonged or strenuous "
-            "outdoor activity."
-        )
+        return "Sensitive groups may want to reduce prolonged or strenuous outdoor activity."
     if pm25 is not None and pm25 > 15:
-        return (
-            "Particle pollution is elevated relative to the WHO annual "
-            "PM2.5 guideline. Consider reducing unnecessary exposure."
-        )
-    return (
-        "Conditions look relatively favorable in this model estimate. "
-        "Check local advisories if you are sensitive to air pollution."
-    )
+        return "PM2.5 is elevated relative to the WHO annual guideline. Consider reducing unnecessary exposure."
+    return "Conditions look relatively favorable in this model estimate. Check local advisories if you are sensitive to air pollution."
 
 
 @app.get("/")
@@ -123,18 +108,26 @@ async def analyze(
     if not city:
         raise HTTPException(status_code=400, detail="Enter a city name.")
 
+    api_key = os.getenv("OPENWEATHER_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Weather service is not configured. Add OPENWEATHER_API_KEY in Render environment variables.",
+        )
+
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        # Resolve the city once; use coordinates for both providers.
         geo = await get_json(
             client,
             GEOCODING_URL,
             {"name": city, "count": 1, "language": "en", "format": "json"},
+            "Open-Meteo geocoding",
         )
-
         results = geo.get("results") or []
         if not results:
             raise HTTPException(
                 status_code=404,
-                detail=f'Could not find "{city}". Try a nearby city name.',
+                detail=f'Could not find "{city}". Try another city name.',
             )
 
         place = results[0]
@@ -142,116 +135,61 @@ async def analyze(
         lon = place["longitude"]
         timezone_name = place.get("timezone") or "auto"
 
-        weather_params = {
-            "latitude": lat,
-            "longitude": lon,
-            "timezone": timezone_name,
-            "forecast_days": 2,
-            "current": (
-                "temperature_2m,relative_humidity_2m,"
-                "wind_speed_10m,weather_code"
-            ),
-            "hourly": (
-                "temperature_2m,relative_humidity_2m,"
-                "wind_speed_10m"
-            ),
-        }
-
-        air_params = {
-            "latitude": lat,
-            "longitude": lon,
-            "timezone": timezone_name,
-            "forecast_days": 2,
-            "current": "pm2_5,pm10,us_aqi",
-            "hourly": "pm2_5,pm10,us_aqi",
-        }
-
-        weather, air = await __import__("asyncio").gather(
-            get_json(client, WEATHER_URL, weather_params),
-            get_json(client, AIR_URL, air_params),
+        weather_task = get_json(
+            client,
+            OPENWEATHER_URL,
+            {
+                "lat": lat,
+                "lon": lon,
+                "appid": api_key,
+                "units": "metric",
+            },
+            "OpenWeather",
         )
 
-    weather_current = weather.get("current") or {}
+        air_task = get_json(
+            client,
+            AIR_URL,
+            {
+                "latitude": lat,
+                "longitude": lon,
+                "timezone": timezone_name,
+                "forecast_days": 2,
+                "current": "pm2_5,pm10,us_aqi",
+                "hourly": "pm2_5,pm10,us_aqi",
+            },
+            "Open-Meteo air quality",
+        )
+
+        weather, air = await asyncio.gather(weather_task, air_task)
+
+    current_weather = weather.get("weather") or [{}]
+    weather_details = current_weather[0] if current_weather else {}
+    main = weather.get("main") or {}
+    wind = weather.get("wind") or {}
     air_current = air.get("current") or {}
-    units = {
-        **weather.get("current_units", {}),
-        **air.get("current_units", {}),
-    }
 
     pm25 = air_current.get("pm2_5")
     pm10 = air_current.get("pm10")
     us_aqi = air_current.get("us_aqi")
-    current_time = weather_current.get("time")
 
-    weather_codes = {
-        0: "Clear sky",
-        1: "Mainly clear",
-        2: "Partly cloudy",
-        3: "Overcast",
-        45: "Fog",
-        48: "Depositing rime fog",
-        51: "Light drizzle",
-        53: "Drizzle",
-        55: "Heavy drizzle",
-        61: "Light rain",
-        63: "Rain",
-        65: "Heavy rain",
-        71: "Light snow",
-        73: "Snow",
-        75: "Heavy snow",
-        80: "Rain showers",
-        81: "Rain showers",
-        82: "Heavy rain showers",
-        95: "Thunderstorm",
-        96: "Thunderstorm with hail",
-        99: "Thunderstorm with heavy hail",
-    }
-    weather_code = weather_current.get("weather_code")
+    # The chart uses the air-quality provider's actual hourly timestamps.
+    hourly = air.get("hourly") or {}
+    times = hourly.get("time") or []
+    current_time = air_current.get("time")
 
-    # Merge hourly series by their timestamps.
-    weather_hourly = weather.get("hourly") or {}
-    air_hourly = air.get("hourly") or {}
-    weather_times = weather_hourly.get("time") or []
-    air_times = air_hourly.get("time") or []
-    air_index = {t: i for i, t in enumerate(air_times)}
-
-    hourly_forecast = []
-    for i, timestamp in enumerate(weather_times):
-        if timestamp < (current_time or timestamp):
+    forecast = []
+    for i, timestamp in enumerate(times):
+        if current_time and timestamp < current_time:
             continue
-        j = air_index.get(timestamp)
-        if j is None:
-            continue
-
-        hourly_forecast.append({
+        forecast.append({
             "time": timestamp,
-            "pm2_5": value_at(air, "pm2_5", j),
-            "pm10": value_at(air, "pm10", j),
-            "us_aqi": value_at(air, "us_aqi", j),
-            "temperature": value_at(weather, "temperature_2m", i),
-            "humidity": value_at(weather, "relative_humidity_2m", i),
-            "wind_speed": value_at(weather, "wind_speed_10m", i),
+            "pm2_5": (hourly.get("pm2_5") or [None] * len(times))[i],
+            "pm10": (hourly.get("pm10") or [None] * len(times))[i],
+            "us_aqi": (hourly.get("us_aqi") or [None] * len(times))[i],
         })
-
-        if len(hourly_forecast) >= 24:
+        if len(forecast) >= 24:
             break
-
-    if not hourly_forecast:
-        # Keep a valid response if the providers' hourly grids do not align.
-        for i, timestamp in enumerate(air_times):
-            if timestamp < (current_time or timestamp):
-                continue
-            hourly_forecast.append({
-                "time": timestamp,
-                "pm2_5": value_at(air, "pm2_5", i),
-                "pm10": value_at(air, "pm10", i),
-                "us_aqi": value_at(air, "us_aqi", i),
-                "temperature": None,
-                "humidity": None,
-                "wind_speed": None,
-            })
-            if len(hourly_forecast) >= 24:
-                break
 
     return {
         "location": {
@@ -262,11 +200,18 @@ async def analyze(
             "longitude": lon,
             "timezone": timezone_name,
         },
-        "updated_at": current_time,
-        "data_source": "Open-Meteo",
+        "updated_at": datetime.fromtimestamp(
+            weather.get("dt", datetime.now(timezone.utc).timestamp()),
+            tz=timezone.utc,
+        ).isoformat(),
+        "data_source": {
+            "weather": "OpenWeather",
+            "air_quality": "Open-Meteo",
+        },
         "data_note": (
-            "These are model-based current-condition estimates and forecasts, "
-            "not readings from a local regulatory monitoring station."
+            "Weather is supplied by OpenWeather. Air-quality current values "
+            "and forecasts are model-based Open-Meteo estimates, not guaranteed "
+            "measurements from a local monitoring station."
         ),
         "pollution": {
             "pm2_5": pm25,
@@ -275,19 +220,27 @@ async def analyze(
             "aqi_status": aqi_label(us_aqi),
         },
         "weather": {
-            "temperature": weather_current.get("temperature_2m"),
-            "humidity": weather_current.get("relative_humidity_2m"),
-            "wind_speed": weather_current.get("wind_speed_10m"),
-            "weather_code": weather_code,
-            "description": weather_codes.get(
-                weather_code, "Weather conditions"
-            ),
+            "temperature": main.get("temp"),
+            "feels_like": main.get("feels_like"),
+            "humidity": main.get("humidity"),
+            "wind_speed": wind.get("speed"),
+            "description": weather_details.get(
+                "description", "Weather conditions unavailable"
+            ).capitalize(),
+            "icon": weather_details.get("icon"),
+            "weather_code": weather.get("weather", [{}])[0].get("id"),
         },
-        "units": units,
+        "units": {
+            "temperature": "°C",
+            "wind_speed": "m/s",
+            "pm2_5": "μg/m³",
+            "pm10": "μg/m³",
+            "us_aqi": "US AQI",
+        },
         "forecast": {
-            "hourly": hourly_forecast,
-            "source": "Open-Meteo hourly forecast",
-            "hours": len(hourly_forecast),
+            "hourly": forecast,
+            "source": "Open-Meteo hourly air-quality forecast",
+            "hours": len(forecast),
         },
         "guidance": build_guidance(us_aqi, pm25),
         "model_status": "not_used",
