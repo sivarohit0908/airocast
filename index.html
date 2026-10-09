@@ -1,245 +1,144 @@
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>AIROCAST | Pollution Intelligence</title>
-
+    <meta name="theme-color" content="#07111f">
+    <title>AIROCAST | AI Pollution Intelligence</title>
+    <meta name="description" content="AIROCAST provides live air quality, weather and short-term pollution forecasts.">
     <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
+    <header class="site-header">
+        <a class="brand" href="./" aria-label="AIROCAST home">
+            <span class="brand-mark">A</span>
+            <span>AIROCAST</span>
+        </a>
+        <span class="header-label">AIR INTELLIGENCE</span>
+    </header>
 
-    <!-- NAVBAR -->
-    <nav class="navbar">
-        <div class="logo">AIROCAST</div>
-        <div class="tagline">Pollution Intelligence</div>
-    </nav>
+```
+<main class="container">
+    <section class="hero">
+        <p class="eyebrow">AI-POWERED ENVIRONMENTAL INTELLIGENCE</p>
+        <h1>Know the air.<br><span>Protect your tomorrow.</span></h1>
+        <p class="hero-description">
+            Explore live air pollution, local weather and short-term PM2.5 forecasts for your city.
+        </p>
 
-
-    <!-- HERO -->
-    <main>
-
-        <section class="hero">
-
-            <div class="hero-content">
-
-                <p class="eyebrow">AI-POWERED AIR INTELLIGENCE</p>
-
-                <h1>
-                    Know the air.<br>
-                    Predict what comes next.
-                </h1>
-
-                <p class="hero-text">
-                    AIROCAST combines location, weather and environmental
-                    signals to understand air pollution and predict what
-                    is coming next.
-                </p>
-
-
-                <!-- SEARCH -->
-                <div class="search-box">
-
-                    <input
-                        type="text"
-                        id="locationInput"
-                        placeholder="Enter a city or location"
-                        autocomplete="off"
-                    >
-
-                    <button id="analyzeBtn" type="button">
-                        Analyze
-                    </button>
-
-                </div>
-
-
-                <button
-                    id="currentLocationBtn"
-                    class="location-button"
-                    type="button"
+        <form id="searchForm" class="search-panel">
+            <label for="locationInput">Enter your city</label>
+            <div class="search-controls">
+                <input
+                    type="text"
+                    id="locationInput"
+                    name="location"
+                    placeholder="e.g. Hyderabad"
+                    value="Hyderabad"
+                    autocomplete="address-level2"
+                    required
                 >
-                    Use my current location
-                </button>
-
+                <button type="submit" id="analyzeBtn">Analyze</button>
             </div>
+            <button type="button" id="currentLocationBtn" class="location-button">
+                Use my current location
+            </button>
+            <p class="search-hint">Air quality and forecasts depend on available data for your location.</p>
+        </form>
+    </section>
 
-        </section>
-
-
-        <!-- PROCESS -->
-        <section class="process">
-
-            <div class="process-item">
-                <span>01</span>
-                <strong>Location</strong>
+    <section id="dashboard" class="dashboard" style="display: none;" aria-live="polite">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">YOUR ENVIRONMENT</p>
+                <h2 id="locationName">Air quality overview</h2>
             </div>
+            <span class="live-indicator"><span></span> API connected</span>
+        </div>
 
-            <div class="arrow">→</div>
+        <div class="metrics-grid">
+            <article class="metric-card primary-card">
+                <p class="metric-label">PM2.5</p>
+                <p class="metric-value"><span id="pm25">--</span></p>
+                <p class="metric-note">Fine particulate matter</p>
+            </article>
 
-            <div class="process-item">
-                <span>02</span>
-                <strong>Weather</strong>
-            </div>
+            <article class="metric-card">
+                <p class="metric-label">US AQI</p>
+                <p class="metric-value" id="aqi">--</p>
+                <p class="metric-note">Air quality index</p>
+            </article>
 
-            <div class="arrow">→</div>
+            <article class="metric-card">
+                <p class="metric-label">Temperature</p>
+                <p class="metric-value" id="temperature">--</p>
+                <p class="metric-note">Current air temperature</p>
+            </article>
 
-            <div class="process-item">
-                <span>03</span>
-                <strong>Pollution</strong>
-            </div>
+            <article class="metric-card">
+                <p class="metric-label">Humidity</p>
+                <p class="metric-value" id="humidity">--</p>
+                <p class="metric-note">Relative humidity</p>
+            </article>
 
-            <div class="arrow">→</div>
+            <article class="metric-card">
+                <p class="metric-label">Wind speed</p>
+                <p class="metric-value" id="wind">--</p>
+                <p class="metric-note">Current wind conditions</p>
+            </article>
 
-            <div class="process-item">
-                <span>04</span>
-                <strong>AI Forecast</strong>
-            </div>
+            <article class="metric-card">
+                <p class="metric-label">Weather</p>
+                <p class="metric-value weather-value" id="weatherDescription">--</p>
+                <p class="metric-note">Local conditions</p>
+            </article>
+        </div>
 
-        </section>
-
-
-        <!-- DASHBOARD -->
-        <section
-            id="dashboard"
-            class="dashboard"
-            style="display: none;"
-        >
-
-            <div class="section-heading">
-                <p class="eyebrow">LIVE ANALYSIS</p>
-                <h2>Environmental conditions</h2>
-            </div>
-
-
-            <div class="metrics-grid">
-
-                <div class="metric-card">
-                    <span class="metric-label">PM2.5</span>
-                    <strong id="pm25">--</strong>
-                    <small>µg/m³</small>
-                </div>
-
-
-                <div class="metric-card">
-                    <span class="metric-label">Temperature</span>
-                    <strong id="temperature">--</strong>
-                </div>
-
-
-                <div class="metric-card">
-                    <span class="metric-label">Humidity</span>
-                    <strong id="humidity">--</strong>
-                </div>
-
-
-                <div class="metric-card">
-                    <span class="metric-label">Wind</span>
-                    <strong id="wind">--</strong>
-                </div>
-
-            </div>
-
-
-            <!-- PREDICTION -->
-            <div class="prediction-card">
-
+        <article class="prediction-card">
+            <div class="prediction-heading">
                 <div>
-                    <span class="metric-label">
-                        AI PREDICTION
-                    </span>
-
-                    <h3>
-                        30–60 minute forecast
-                    </h3>
+                    <p class="eyebrow">SHORT-TERM OUTLOOK</p>
+                    <h2>PM2.5 forecast</h2>
                 </div>
-
-                <div
-                    id="prediction"
-                    class="prediction-value"
-                >
-                    Coming soon
-                </div>
-
+                <span class="forecast-tag">30–60 MIN</span>
             </div>
+            <p id="prediction" class="prediction-value">Forecast will appear after analysis.</p>
+            <p id="predictionSource" class="prediction-note">
+                Forecast values are estimates, not a guarantee of future air quality.
+            </p>
+        </article>
 
-        </section>
+        <p id="dataStatus" class="data-status"></p>
+    </section>
 
+    <section class="info-section">
+        <p class="eyebrow">HOW IT WORKS</p>
+        <h2>Environmental data, made clearer.</h2>
+        <div class="info-grid">
+            <article class="info-card">
+                <h3>Live air quality</h3>
+                <p>View available PM2.5 and air quality index readings for your selected city.</p>
+            </article>
+            <article class="info-card">
+                <h3>Weather context</h3>
+                <p>Review temperature, humidity and wind alongside pollution measurements.</p>
+            </article>
+            <article class="info-card">
+                <h3>Short-term forecast</h3>
+                <p>Explore external forecast estimates separately from AIROCAST's trained ML model.</p>
+            </article>
+        </div>
+    </section>
+</main>
 
-        <!-- HOW IT WORKS -->
-        <section class="how-it-works">
+<footer class="site-footer">
+    <p>AIROCAST · Air pollution intelligence</p>
+    <p>Forecasts are estimates and should not be used as the sole basis for health decisions.</p>
+</footer>
 
-            <div class="section-heading">
-                <p class="eyebrow">HOW IT WORKS</p>
-
-                <h2>
-                    From raw signals to air intelligence.
-                </h2>
-            </div>
-
-
-            <div class="steps">
-
-                <div class="step">
-                    <span>01</span>
-
-                    <h3>Locate</h3>
-
-                    <p>
-                        Identify the area you want to analyze.
-                    </p>
-                </div>
-
-
-                <div class="step">
-                    <span>02</span>
-
-                    <h3>Collect</h3>
-
-                    <p>
-                        Gather weather and environmental signals.
-                    </p>
-                </div>
-
-
-                <div class="step">
-                    <span>03</span>
-
-                    <h3>Analyze</h3>
-
-                    <p>
-                        Process the signals through AI models.
-                    </p>
-                </div>
-
-
-                <div class="step">
-                    <span>04</span>
-
-                    <h3>Predict</h3>
-
-                    <p>
-                        Estimate how pollution may change next.
-                    </p>
-                </div>
-
-            </div>
-
-        </section>
-
-    </main>
-
-
-    <!-- FOOTER -->
-    <footer>
-        <strong>AIROCAST</strong>
-        <span>AI-powered pollution intelligence</span>
-    </footer>
-
-
-    <script src="app.js"></script>
+<script src="app.js" defer></script>
+```
 
 </body>
 </html>
