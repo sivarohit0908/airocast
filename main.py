@@ -1,325 +1,296 @@
 
 import os
-import logging
+from datetime import datetime, timezone
+from typing import Any
 
 import httpx
-import joblib
-import numpy as np
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("airocast")
+app = FastAPI(
+    title="AIROCAST API",
+    description="Weather and air-quality data powered by Open-Meteo.",
+    version="2.0.0",
+)
 
-app = FastAPI(title="AIROCAST API", version="2.0.0")
-
+# GitHub Pages frontend + local development.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://sivarohit0908.github.io"],
+    allow_origins=[
+        "https://sivarohit0908.github.io",
+        "http://localhost:5500",
+        "http://127.0.0.1:5500",
+    ],
     allow_credentials=False,
     allow_methods=["GET"],
     allow_headers=["*"],
 )
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "random_forest_pm25.joblib")
-OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
+TIMEOUT = httpx.Timeout(15.0, connect=8.0)
 
-# Load the trained model safely at startup.
-model = None
-model_load_error = None
+WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
+AIR_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
+GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 
-try:
-    if os.path.isfile(MODEL_PATH):
-        model = joblib.load(MODEL_PATH)
-        logger.info("Random Forest model loaded successfully.")
-    else:
-        model_load_error = (
-            "Model file not found at the repository root. "
-            "Expected random_forest_pm25.joblib."
+
+async def get_json(
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="An Open-Meteo data service is temporarily unavailable.",
+        ) from exc
+
+
+def value_at(data: dict, key: str, index: int = 0):
+    values = data.get("hourly", {}).get(key) or []
+    return values[index] if len(values) > index else None
+
+
+def aqi_label(aqi):
+    if aqi is None:
+        return {"label": "Unavailable", "level": "unknown"}
+
+    if aqi <= 50:
+        return {"label": "Good", "level": "good"}
+    if aqi <= 100:
+        return {"label": "Moderate", "level": "moderate"}
+    if aqi <= 150:
+        return {
+            "label": "Unhealthy for sensitive groups",
+            "level": "sensitive",
+        }
+    if aqi <= 200:
+        return {"label": "Unhealthy", "level": "unhealthy"}
+    if aqi <= 300:
+        return {"label": "Very unhealthy", "level": "very_unhealthy"}
+    return {"label": "Hazardous", "level": "hazardous"}
+
+
+def build_guidance(aqi, pm25):
+    if aqi is None and pm25 is None:
+        return (
+            "Air-quality guidance is unavailable because the required "
+            "data could not be retrieved."
         )
-        logger.warning(model_load_error)
-except Exception as exc:
-    model_load_error = f"{type(exc).__name__}: {str(exc)[:200]}"
-    logger.exception("Could not load the Random Forest model.")
+    if aqi is not None and aqi > 150:
+        return (
+            "Consider limiting prolonged or strenuous outdoor activity. "
+            "Sensitive groups should take extra care."
+        )
+    if aqi is not None and aqi > 100:
+        return (
+            "Sensitive groups may want to reduce prolonged or strenuous "
+            "outdoor activity."
+        )
+    if pm25 is not None and pm25 > 15:
+        return (
+            "Particle pollution is elevated relative to the WHO annual "
+            "PM2.5 guideline. Consider reducing unnecessary exposure."
+        )
+    return (
+        "Conditions look relatively favorable in this model estimate. "
+        "Check local advisories if you are sensitive to air pollution."
+    )
 
 
 @app.get("/")
-def home():
+async def root():
     return {
-        "message": "AIROCAST API is running",
-        "model_loaded": model is not None,
-    }
-
-
-@app.get("/api/health")
-def health():
-    return {
-        "status": "ok",
         "service": "AIROCAST API",
-        "model_loaded": model is not None,
-        "model_error": model_load_error,
+        "status": "online",
+        "docs": "/docs",
     }
 
 
-async def get_location(client, location):
-    response = await client.get(
-        "https://geocoding-api.open-meteo.com/v1/search",
-        params={
-            "name": location,
-            "count": 1,
-            "language": "en",
-            "format": "json",
-        },
-    )
-    response.raise_for_status()
-    results = response.json().get("results", [])
-
-    if not results:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Location not found: {location}",
-        )
-
-    place = results[0]
-    return {
-        "searched": location,
-        "name": place.get("name", location),
-        "country": place.get("country", ""),
-        "latitude": place["latitude"],
-        "longitude": place["longitude"],
-    }
-
-
-async def get_air_quality(client, latitude, longitude):
-    response = await client.get(
-        "https://air-quality-api.open-meteo.com/v1/air-quality",
-        params={
-            "latitude": latitude,
-            "longitude": longitude,
-            "current": "pm2_5,pm10,us_aqi",
-            "hourly": "pm2_5,pm10,us_aqi",
-            "forecast_hours": 6,
-            "timezone": "auto",
-        },
-    )
-    response.raise_for_status()
-    return response.json()
-
-
-async def get_weather(client, latitude, longitude):
-    # Prefer the configured OpenWeather service.
-    if OPENWEATHER_API_KEY:
-        try:
-            response = await client.get(
-                "https://api.openweathermap.org/data/2.5/weather",
-                params={
-                    "lat": latitude,
-                    "lon": longitude,
-                    "appid": OPENWEATHER_API_KEY,
-                    "units": "metric",
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-            main = result.get("main", {})
-            wind = result.get("wind", {})
-
-            return {
-                "temperature": main.get("temp"),
-                "humidity": main.get("humidity"),
-                "wind_speed": wind.get("speed"),
-                "wind_direction": wind.get("deg"),
-                "description": result.get("weather", [{}])[0].get(
-                    "description"
-                ),
-                "source": "OpenWeather",
-            }, "success"
-
-        except httpx.HTTPStatusError as exc:
-            logger.warning(
-                "OpenWeather returned HTTP %s",
-                exc.response.status_code,
-            )
-            weather_status = (
-                f"OpenWeather HTTP error: {exc.response.status_code}"
-            )
-        except httpx.RequestError:
-            weather_status = "OpenWeather connection error"
-    else:
-        weather_status = "OpenWeather API key not configured"
-
-    # Fallback to Open-Meteo so weather can still be displayed.
-    try:
-        response = await client.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={
-                "latitude": latitude,
-                "longitude": longitude,
-                "current": (
-                    "temperature_2m,relative_humidity_2m,"
-                    "wind_speed_10m,wind_direction_10m"
-                ),
-                "timezone": "auto",
-            },
-        )
-        response.raise_for_status()
-        current = response.json().get("current", {})
-
-        return {
-            "temperature": current.get("temperature_2m"),
-            "humidity": current.get("relative_humidity_2m"),
-            "wind_speed": current.get("wind_speed_10m"),
-            "wind_direction": current.get("wind_direction_10m"),
-            "source": "Open-Meteo",
-        }, f"success (fallback; {weather_status})"
-
-    except (httpx.HTTPError, ValueError):
-        return None, weather_status
-
-
-def make_forecast(air_data):
-    current = air_data.get("current", {})
-    hourly = air_data.get("hourly", {})
-    values = hourly.get("pm2_5", [])
-
-    # Open-Meteo hourly forecast: interpolate between the
-    # current value and the next hourly forecast when possible.
-    current_pm25 = current.get("pm2_5")
-    next_pm25 = values[1] if len(values) > 1 else None
-
-    def valid_number(value):
-        return (
-            isinstance(value, (int, float))
-            and np.isfinite(value)
-        )
-
-    pm30 = None
-    pm60 = None
-    trend = "unavailable"
-
-    if valid_number(current_pm25) and valid_number(next_pm25):
-        pm30 = round((current_pm25 + next_pm25) / 2, 1)
-        pm60 = round(float(next_pm25), 1)
-
-        difference = next_pm25 - current_pm25
-        if difference > 1:
-            trend = "rising"
-        elif difference < -1:
-            trend = "falling"
-        else:
-            trend = "stable"
-
-        forecast_text = (
-            f"Estimated PM2.5: {pm30} µg/m³ in 30 min; "
-            f"{pm60} µg/m³ in 60 min. Trend: {trend}. "
-            "Based on Open-Meteo hourly forecast."
-        )
-        status = "success"
-    else:
-        forecast_text = "PM2.5 forecast is currently unavailable."
-        status = "unavailable"
-
-    return {
-        "forecast_30_60_min": forecast_text,
-        "pm25_in_30_min": pm30,
-        "pm25_in_60_min": pm60,
-        "trend": trend,
-        "status": status,
-        "source": "Open-Meteo hourly air-quality forecast",
-        "method": "Hourly forecast interpolation",
-        "note": (
-            "External forecast, not an AIROCAST ML prediction."
-        ),
-    }
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 @app.get("/api/analyze")
 async def analyze(
-    location: str = Query(
-        default="Hyderabad", min_length=2, max_length=100
-    )
+    location: str = Query(..., min_length=2, max_length=100),
 ):
-    try:
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            place = await get_location(client, location)
-            latitude = place["latitude"]
-            longitude = place["longitude"]
+    city = location.strip()
+    if not city:
+        raise HTTPException(status_code=400, detail="Enter a city name.")
 
-            air_data = await get_air_quality(
-                client, latitude, longitude
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        geo = await get_json(
+            client,
+            GEOCODING_URL,
+            {"name": city, "count": 1, "language": "en", "format": "json"},
+        )
+
+        results = geo.get("results") or []
+        if not results:
+            raise HTTPException(
+                status_code=404,
+                detail=f'Could not find "{city}". Try a nearby city name.',
             )
-            weather, weather_status = await get_weather(
-                client, latitude, longitude
-            )
 
-        current = air_data.get("current", {})
-        pm25 = current.get("pm2_5")
-        pm10 = current.get("pm10")
-        us_aqi = current.get("us_aqi")
+        place = results[0]
+        lat = place["latitude"]
+        lon = place["longitude"]
+        timezone_name = place.get("timezone") or "auto"
 
-        # The trained model requires pollutant history and all
-        # training features. The live API does not supply the
-        # complete, correctly aligned feature set yet.
-        ml_prediction = {
-            "available": False,
-            "value": None,
-            "status": (
-                "model_loaded_but_inputs_missing"
-                if model is not None
-                else "model_unavailable"
+        weather_params = {
+            "latitude": lat,
+            "longitude": lon,
+            "timezone": timezone_name,
+            "forecast_days": 2,
+            "current": (
+                "temperature_2m,relative_humidity_2m,"
+                "wind_speed_10m,weather_code"
             ),
-            "message": (
-                "Model loaded, but ML predictions are disabled "
-                "until matching historical and weather features "
-                "are connected."
-                if model is not None
-                else model_load_error or "Model is not loaded."
+            "hourly": (
+                "temperature_2m,relative_humidity_2m,"
+                "wind_speed_10m"
             ),
         }
 
-        return {
-            "status": "success",
-            "location": place,
-            "weather": weather,
-            "weather_status": weather_status,
-            "pollution": {
-                "pm25": pm25,
-                "pm10": pm10,
-                "us_aqi": us_aqi,
-                "unit": "µg/m³",
-                "status": "success",
-                "source": "Open-Meteo Air Quality API",
-            },
-            "prediction": {
-                **make_forecast(air_data),
-                "ml_prediction": ml_prediction,
-            },
-            "model_status": {
-                "loaded": model is not None,
-                "error": model_load_error,
-            },
-            "data_attribution": (
-                "Air quality and fallback weather: Open-Meteo. "
-                "Weather when available: OpenWeather."
-            ),
+        air_params = {
+            "latitude": lat,
+            "longitude": lon,
+            "timezone": timezone_name,
+            "forecast_days": 2,
+            "current": "pm2_5,pm10,us_aqi",
+            "hourly": "pm2_5,pm10,us_aqi",
         }
 
-    except HTTPException:
-        raise
-    except httpx.HTTPStatusError as exc:
-        logger.exception("An upstream API returned an HTTP error.")
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "An upstream data service returned HTTP "
-                f"{exc.response.status_code}."
+        weather, air = await __import__("asyncio").gather(
+            get_json(client, WEATHER_URL, weather_params),
+            get_json(client, AIR_URL, air_params),
+        )
+
+    weather_current = weather.get("current") or {}
+    air_current = air.get("current") or {}
+    units = {
+        **weather.get("current_units", {}),
+        **air.get("current_units", {}),
+    }
+
+    pm25 = air_current.get("pm2_5")
+    pm10 = air_current.get("pm10")
+    us_aqi = air_current.get("us_aqi")
+    current_time = weather_current.get("time")
+
+    weather_codes = {
+        0: "Clear sky",
+        1: "Mainly clear",
+        2: "Partly cloudy",
+        3: "Overcast",
+        45: "Fog",
+        48: "Depositing rime fog",
+        51: "Light drizzle",
+        53: "Drizzle",
+        55: "Heavy drizzle",
+        61: "Light rain",
+        63: "Rain",
+        65: "Heavy rain",
+        71: "Light snow",
+        73: "Snow",
+        75: "Heavy snow",
+        80: "Rain showers",
+        81: "Rain showers",
+        82: "Heavy rain showers",
+        95: "Thunderstorm",
+        96: "Thunderstorm with hail",
+        99: "Thunderstorm with heavy hail",
+    }
+    weather_code = weather_current.get("weather_code")
+
+    # Merge hourly series by their timestamps.
+    weather_hourly = weather.get("hourly") or {}
+    air_hourly = air.get("hourly") or {}
+    weather_times = weather_hourly.get("time") or []
+    air_times = air_hourly.get("time") or []
+    air_index = {t: i for i, t in enumerate(air_times)}
+
+    hourly_forecast = []
+    for i, timestamp in enumerate(weather_times):
+        if timestamp < (current_time or timestamp):
+            continue
+        j = air_index.get(timestamp)
+        if j is None:
+            continue
+
+        hourly_forecast.append({
+            "time": timestamp,
+            "pm2_5": value_at(air, "pm2_5", j),
+            "pm10": value_at(air, "pm10", j),
+            "us_aqi": value_at(air, "us_aqi", j),
+            "temperature": value_at(weather, "temperature_2m", i),
+            "humidity": value_at(weather, "relative_humidity_2m", i),
+            "wind_speed": value_at(weather, "wind_speed_10m", i),
+        })
+
+        if len(hourly_forecast) >= 24:
+            break
+
+    if not hourly_forecast:
+        # Keep a valid response if the providers' hourly grids do not align.
+        for i, timestamp in enumerate(air_times):
+            if timestamp < (current_time or timestamp):
+                continue
+            hourly_forecast.append({
+                "time": timestamp,
+                "pm2_5": value_at(air, "pm2_5", i),
+                "pm10": value_at(air, "pm10", i),
+                "us_aqi": value_at(air, "us_aqi", i),
+                "temperature": None,
+                "humidity": None,
+                "wind_speed": None,
+            })
+            if len(hourly_forecast) >= 24:
+                break
+
+    return {
+        "location": {
+            "name": place.get("name", city),
+            "admin1": place.get("admin1"),
+            "country": place.get("country"),
+            "latitude": lat,
+            "longitude": lon,
+            "timezone": timezone_name,
+        },
+        "updated_at": current_time,
+        "data_source": "Open-Meteo",
+        "data_note": (
+            "These are model-based current-condition estimates and forecasts, "
+            "not readings from a local regulatory monitoring station."
+        ),
+        "pollution": {
+            "pm2_5": pm25,
+            "pm10": pm10,
+            "us_aqi": us_aqi,
+            "aqi_status": aqi_label(us_aqi),
+        },
+        "weather": {
+            "temperature": weather_current.get("temperature_2m"),
+            "humidity": weather_current.get("relative_humidity_2m"),
+            "wind_speed": weather_current.get("wind_speed_10m"),
+            "weather_code": weather_code,
+            "description": weather_codes.get(
+                weather_code, "Weather conditions"
             ),
-        )
-    except httpx.RequestError:
-        logger.exception("Could not connect to an upstream API.")
-        raise HTTPException(
-            status_code=502,
-            detail="Could not connect to an upstream data service.",
-        )
+        },
+        "units": units,
+        "forecast": {
+            "hourly": hourly_forecast,
+            "source": "Open-Meteo hourly forecast",
+            "hours": len(hourly_forecast),
+        },
+        "guidance": build_guidance(us_aqi, pm25),
+        "model_status": "not_used",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
