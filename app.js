@@ -1,271 +1,474 @@
 
-"use strict";
+(() => {
+  "use strict";
 
-const API = "https://airocast.onrender.com";
-const $ = (id) => document.getElementById(id);
-let chart = null;
+  const API_BASE = "https://airocast.onrender.com";
 
-function showStatus(message, type = "") {
-  const el = $("statusMessage");
-  if (el) {
+  const $ = (id) => document.getElementById(id);
+  let forecastChart = null;
+
+  function setStatus(message, isError = false) {
+    const el = $("statusMessage");
+    if (!el) return;
     el.textContent = message;
-    el.className = `status-message ${type}`.trim();
-  }
-}
-
-function fmt(value, digits = 1) {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) {
-    return "—";
-  }
-  return Number(value).toFixed(digits);
-}
-
-function trendText(current, future) {
-  if (!Number.isFinite(current) || !Number.isFinite(future)) {
-    return "Forecast unavailable";
+    el.classList.toggle("error", isError);
   }
 
-  const difference = future - current;
-  const threshold = Math.max(1, Math.abs(current) * 0.05);
-
-  if (difference > threshold) return "↑ Pollution may worsen";
-  if (difference < -threshold) return "↓ Pollution may improve";
-  return "→ Expected to remain stable";
-}
-
-function setOutlook(valueId, trendId, changeId, value, current) {
-  const valueEl = $(valueId);
-  const trendEl = $(trendId);
-  const changeEl = $(changeId);
-
-  if (valueEl) valueEl.textContent = fmt(value);
-  if (trendEl) trendEl.textContent = trendText(current, value);
-
-  if (changeEl) {
-    if (Number.isFinite(current) && Number.isFinite(value)) {
-      const delta = value - current;
-      changeEl.textContent =
-        `${delta > 0 ? "+" : ""}${fmt(delta)} μg/m³ from current PM2.5`;
-    } else {
-      changeEl.textContent = "";
-    }
-  }
-}
-
-function renderOutlook(data) {
-  const current = Number(data?.pollution?.pm2_5);
-  const rows = data?.forecast?.hourly;
-
-  if (!Number.isFinite(current) || !Array.isArray(rows) || rows.length === 0) {
-    setOutlook("pm25Thirty", "trendThirty", "changeThirty", NaN, current);
-    setOutlook("pm25Sixty", "trendSixty", "changeSixty", NaN, current);
-    return;
+  function setText(id, value) {
+    const el = $(id);
+    if (el) el.textContent = value ?? "—";
   }
 
-  const valid = rows
-    .filter((row) => row.time && Number.isFinite(Number(row.pm2_5)))
-    .map((row) => ({
-      time: new Date(row.time).getTime(),
-      value: Number(row.pm2_5)
-    }))
-    .filter((row) => Number.isFinite(row.time))
-    .sort((a, b) => a.time - b.time);
+  function number(value, digits = 1) {
+    const n = Number(value);
+    return Number.isFinite(n)
+      ? n.toFixed(digits).replace(/\.0$/, "")
+      : "—";
+  }
 
-  if (!valid.length) return;
+  function aqiDescription(value, supplied) {
+    if (supplied?.label) return supplied.label;
 
-  // The hourly forecast is used to estimate values between forecast points.
-  // This is interpolation, not a dedicated 30-minute forecast.
-  const firstTime = valid[0].time;
-  const target30 = firstTime + 30 * 60 * 1000;
-  const target60 = firstTime + 60 * 60 * 1000;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "Air quality unavailable";
+    if (n <= 50) return "Good";
+    if (n <= 100) return "Moderate";
+    if (n <= 150) return "Unhealthy for sensitive groups";
+    if (n <= 200) return "Unhealthy";
+    if (n <= 300) return "Very unhealthy";
+    return "Hazardous";
+  }
 
-  function estimate(target) {
-    if (target <= valid[0].time) return valid[0].value;
+  function aqiLevel(value, supplied) {
+    if (supplied?.level) return supplied.level;
 
-    for (let i = 1; i < valid.length; i++) {
-      const left = valid[i - 1];
-      const right = valid[i];
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "unknown";
+    if (n <= 50) return "good";
+    if (n <= 100) return "moderate";
+    if (n <= 150) return "sensitive";
+    if (n <= 200) return "unhealthy";
+    if (n <= 300) return "very-unhealthy";
+    return "hazardous";
+  }
 
-      if (target <= right.time) {
-        const span = right.time - left.time;
-        if (!span) return right.value;
-        const fraction = (target - left.time) / span;
-        return left.value + fraction * (right.value - left.value);
+  function weatherSymbol(code, description) {
+    const d = String(description || "").toLowerCase();
+
+    if (d.includes("thunder")) return "ϟ";
+    if (d.includes("snow")) return "❄";
+    if (d.includes("rain") || d.includes("drizzle")) return "☂";
+    if (d.includes("cloud")) return "☁";
+    if (d.includes("mist") || d.includes("fog") || d.includes("haze")) return "≋";
+    if (Number(code) === 800 || d.includes("clear")) return "☀";
+
+    return "◌";
+  }
+
+  function renderChart(hourly) {
+    const canvas = $("forecastChart");
+    if (!canvas || typeof Chart === "undefined") return;
+
+    const rows = Array.isArray(hourly) ? hourly.slice(0, 24) : [];
+
+    if (!rows.length) {
+      if (forecastChart) {
+        forecastChart.destroy();
+        forecastChart = null;
       }
+      return;
     }
 
-    return valid[valid.length - 1].value;
-  }
+    const labels = rows.map((row) => {
+      const raw = row.time || row.datetime || "";
+      const date = new Date(raw);
 
-  setOutlook(
-    "pm25Thirty", "trendThirty", "changeThirty",
-    estimate(target30), current
-  );
+      return Number.isNaN(date.getTime())
+        ? String(raw).slice(-5)
+        : date.toLocaleTimeString([], { hour: "numeric" });
+    });
 
-  setOutlook(
-    "pm25Sixty", "trendSixty", "changeSixty",
-    estimate(target60), current
-  );
-}
+    const values = rows.map((row) => {
+      const value = Number(row.pm2_5);
+      return Number.isFinite(value) ? value : null;
+    });
 
-function renderChart(rows) {
-  const canvas = $("forecastChart");
-  if (!canvas || typeof Chart === "undefined") return;
+    if (forecastChart) forecastChart.destroy();
 
-  const valid = (rows || []).filter(
-    (row) => row.time && Number.isFinite(Number(row.pm2_5))
-  );
-
-  if (chart) chart.destroy();
-
-  chart = new Chart(canvas, {
-    type: "line",
-    data: {
-      labels: valid.map((row) => row.time.slice(11, 16)),
-      datasets: [{
-        label: "PM2.5 forecast",
-        data: valid.map((row) => Number(row.pm2_5)),
-        borderColor: "#a7f3c4",
-        backgroundColor: "rgba(167,243,196,0.12)",
-        fill: true,
-        tension: 0.35,
-        pointRadius: 2
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { intersect: false, mode: "index" },
-      plugins: { legend: { display: false } },
-      scales: {
-        x: {
-          grid: { display: false },
-          ticks: { color: "#91a79a", maxTicksLimit: 8 }
+    forecastChart = new Chart(canvas, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          label: "PM2.5",
+          data: values,
+          borderColor: "#9bf2c0",
+          backgroundColor: "rgba(155,242,192,0.10)",
+          borderWidth: 2.5,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          pointBackgroundColor: "#9bf2c0",
+          fill: true,
+          tension: 0.36,
+          spanGaps: true
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+          intersect: false,
+          mode: "index"
         },
-        y: {
-          beginAtZero: true,
-          grid: { color: "rgba(171,218,187,0.1)" },
-          ticks: { color: "#91a79a" }
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: "#10251b",
+            titleColor: "#effaf2",
+            bodyColor: "#b8d6c2",
+            borderColor: "rgba(155,242,192,0.2)",
+            borderWidth: 1,
+            padding: 11
+          }
+        },
+        scales: {
+          x: {
+            grid: { display: false },
+            ticks: {
+              color: "#789382",
+              maxTicksLimit: 6,
+              maxRotation: 0,
+              autoSkip: true,
+              font: { size: 10 }
+            },
+            border: { display: false }
+          },
+          y: {
+            beginAtZero: true,
+            grid: { color: "rgba(177,220,195,0.08)" },
+            ticks: {
+              color: "#789382",
+              font: { size: 10 },
+              maxTicksLimit: 5
+            },
+            border: { display: false }
+          }
         }
       }
-    }
-  });
-}
-
-function renderDashboard(data) {
-  const loc = data.location || {};
-  const p = data.pollution || {};
-  const w = data.weather || {};
-  const hourly = data.forecast?.hourly || [];
-
-  $("locationName").textContent =
-    [loc.name, loc.admin1, loc.country].filter(Boolean).join(", ");
-  $("updatedAt").textContent = data.updated_at
-    ? `Updated ${data.updated_at.replace("T", " ").slice(0, 16)}`
-    : "Latest available data";
-
-  $("pm25").textContent = fmt(p.pm2_5);
-  $("pm10").textContent = fmt(p.pm10);
-  $("aqi").textContent = fmt(p.us_aqi, 0);
-  $("aqiFoot").textContent = p.aqi_status?.label || "AQI estimate";
-  $("aqiLabel").textContent = p.aqi_status?.label || "AQI unavailable";
-  $("aqiBadge").dataset.level = p.aqi_status?.level || "unknown";
-
-  $("temperature").textContent = fmt(w.temperature);
-  $("feelsLike").textContent = `Feels like ${fmt(w.feels_like)}°C`;
-  $("feelsLikeSide").textContent = `${fmt(w.feels_like)}°C`;
-  $("weatherTempLarge").textContent = `${fmt(w.temperature, 0)}°`;
-  $("weatherDescription").textContent = w.description || "Weather unavailable";
-  $("weatherDescriptionLarge").textContent = w.description || "Weather unavailable";
-  $("humidity").textContent = `${fmt(w.humidity, 0)}%`;
-  $("wind").textContent = `${fmt(w.wind_speed)} m/s`;
-
-  const icons = {
-    "01": "☀", "02": "🌤", "03": "☁", "04": "☁",
-    "09": "🌧", "10": "🌦", "11": "⛈", "13": "❄", "50": "🌫"
-  };
-  $("weatherIcon").textContent = icons[(w.icon || "").slice(0, 2)] || "☁";
-
-  $("guidance").textContent = data.guidance || "Guidance unavailable.";
-  $("dataNote").textContent = data.data_note || "Weather and air-quality sources may update at different times.";
-
-  renderChart(hourly);
-  renderOutlook(data);
-  $("dashboard").hidden = false;
-}
-
-async function analyze(city) {
-  city = String(city || "").trim();
-  if (city.length < 2) {
-    showStatus("Enter a city name first.", "error");
-    return;
+    });
   }
 
-  const button = $("analyzeBtn");
-  button.disabled = true;
-  button.querySelector("span:first-child").textContent = "Analyzing…";
-  showStatus(`Loading real data for ${city}…`);
+  function renderOutlook(value, current, trendId, changeId, minutes) {
+    const target = Number(value);
+    const base = Number(current);
+    const valueId = minutes === 30 ? "pm25Thirty" : "pm25Sixty";
+    const trendEl = $(trendId);
+    const changeEl = $(changeId);
 
-  try {
-    const url = new URL("/api/analyze", API);
-    url.searchParams.set("location", city);
+    if (!Number.isFinite(target)) {
+      setText(valueId, "—");
 
-    const response = await fetch(url);
-    const data = await response.json();
+      if (trendEl) {
+        trendEl.textContent = "Forecast unavailable";
+        trendEl.className = "trend neutral";
+      }
 
-    if (!response.ok) {
-      throw new Error(data.detail || `Request failed (${response.status}).`);
+      if (changeEl) {
+        changeEl.textContent = "No short-term forecast data returned";
+      }
+      return;
     }
 
-    renderDashboard(data);
-    $("locationInput").value = data.location?.name || city;
-    showStatus(`Analysis complete for ${data.location?.name || city}.`, "success");
-  } catch (error) {
-    showStatus(error.message || "Could not load data. Please try again.", "error");
-  } finally {
-    button.disabled = false;
-    button.querySelector("span:first-child").textContent = "Analyze air";
+    setText(valueId, number(target));
+
+    const delta = Number.isFinite(base) ? target - base : 0;
+    const threshold = Math.max(0.5, Math.abs(base || 0) * 0.03);
+
+    let label;
+    let className;
+
+    if (!Number.isFinite(base) || Math.abs(delta) < threshold) {
+      label = "→ Staying about the same";
+      className = "neutral";
+    } else if (delta < 0) {
+      label = "↓ Pollution may improve";
+      className = "good";
+    } else {
+      label = "↑ Pollution may worsen";
+      className = "bad";
+    }
+
+    if (trendEl) {
+      trendEl.textContent = label;
+      trendEl.className = `trend ${className}`;
+    }
+
+    if (changeEl) {
+      if (!Number.isFinite(base)) {
+        changeEl.textContent = "Compared with current level";
+      } else {
+        const sign = delta > 0 ? "+" : "";
+        changeEl.textContent =
+          `${sign}${number(delta)} μg/m³ vs now`;
+      }
+    }
   }
-}
 
-$("searchForm").addEventListener("submit", (event) => {
-  event.preventDefault();
-  analyze($("locationInput").value);
-});
+  function getOutlook(data) {
+    const rows = Array.isArray(data?.forecast?.hourly)
+      ? data.forecast.hourly
+      : [];
 
-$("currentLocationBtn").addEventListener("click", () => {
-  if (!navigator.geolocation) {
-    showStatus("Location access is unavailable. Enter a city instead.", "error");
-    return;
+    const current = Number(data?.pollution?.pm2_5);
+
+    const validRows = rows
+      .map((row) => ({
+        ...row,
+        pm2_5: Number(row.pm2_5)
+      }))
+      .filter((row) => Number.isFinite(row.pm2_5));
+
+    const firstHour = validRows.length
+      ? validRows[0].pm2_5
+      : NaN;
+
+    // Estimate 30 minutes by interpolating between the current
+    // value and the first hourly forecast.
+    const thirtyMinutes =
+      Number.isFinite(current) && Number.isFinite(firstHour)
+        ? current + (firstHour - current) * 0.5
+        : NaN;
+
+    // Use the first hourly forecast for the one-hour outlook.
+    const sixtyMinutes = firstHour;
+
+    return {
+      current,
+      thirtyMinutes,
+      sixtyMinutes,
+      rows
+    };
   }
 
-  showStatus("Finding your city…");
+  function renderData(data) {
+    if (!data?.location || !data?.pollution || !data?.weather) {
+      throw new Error(
+        "The API response is missing expected weather or air-quality data."
+      );
+    }
 
-  navigator.geolocation.getCurrentPosition(async (position) => {
+    const location = data.location;
+    const pollution = data.pollution;
+    const weather = data.weather;
+
+    const aqi = pollution.us_aqi;
+    const status = aqiDescription(aqi, pollution.aqi_status);
+
+    setText(
+      "locationName",
+      [location.name, location.admin1, location.country]
+        .filter(Boolean)
+        .join(", ")
+    );
+
+    setText(
+      "updatedAt",
+      data.updated_at
+        ? `Updated ${new Date(data.updated_at).toLocaleString([], {
+            dateStyle: "medium",
+            timeStyle: "short"
+          })}`
+        : "Latest available data"
+    );
+
+    setText("pm25", number(pollution.pm2_5));
+    setText("pm10", number(pollution.pm10));
+    setText("aqi", number(aqi, 0));
+    setText("aqiLabel", status);
+    setText("aqiFoot", status);
+
+    const badge = $("aqiBadge");
+    if (badge) badge.dataset.level = aqiLevel(aqi, pollution.aqi_status);
+
+    setText("temperature", number(weather.temperature));
+    setText("feelsLike", `Feels like ${number(weather.feels_like)}°C`);
+    setText("feelsLikeSide", `${number(weather.feels_like)}°C`);
+    setText("humidity", `${number(weather.humidity, 0)}%`);
+    setText("wind", `${number(weather.wind_speed)} m/s`);
+
+    setText(
+      "weatherDescription",
+      weather.description || "Conditions unavailable"
+    );
+
+    setText(
+      "weatherDescriptionLarge",
+      weather.description || "Conditions unavailable"
+    );
+
+    setText("weatherTempLarge", `${number(weather.temperature, 0)}°`);
+
+    setText(
+      "weatherIcon",
+      weatherSymbol(weather.weather_code, weather.description)
+    );
+
+    setText(
+      "guidance",
+      data.guidance ||
+        "Use the current air-quality estimate to guide outdoor activity."
+    );
+
+    setText(
+      "dataNote",
+      data.data_note ||
+        "Weather from OpenWeather; air quality and forecast from Open-Meteo."
+    );
+
+    renderChart(data.forecast?.hourly);
+
+    const outlook = getOutlook(data);
+
+    renderOutlook(
+      outlook.thirtyMinutes,
+      outlook.current,
+      "trendThirty",
+      "changeThirty",
+      30
+    );
+
+    renderOutlook(
+      outlook.sixtyMinutes,
+      outlook.current,
+      "trendSixty",
+      "changeSixty",
+      60
+    );
+
+    $("dashboard").hidden = false;
+    $("dashboard").scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
+  }
+
+  async function analyze(location) {
+    const button = $("analyzeBtn");
+
+    if (!button) {
+      setStatus("The Analyze button could not be found.", true);
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = "Analyzing…";
+
+    setStatus(`Getting current conditions for ${location}…`);
+
     try {
-      const url = new URL("https://api.bigdatacloud.net/data/reverse-geocode-client");
-      url.searchParams.set("latitude", position.coords.latitude);
-      url.searchParams.set("longitude", position.coords.longitude);
-      url.searchParams.set("localityLanguage", "en");
+      const url =
+        `${API_BASE}/api/analyze?location=${encodeURIComponent(location)}`;
 
-      const response = await fetch(url);
-      if (!response.ok) throw new Error("Could not identify your city.");
+      const response = await fetch(url, {
+        headers: { Accept: "application/json" }
+      });
 
-      const result = await response.json();
-      const city = result.city || result.locality || result.principalSubdivision;
+      let payload;
 
-      if (!city) throw new Error("City not found. Please enter it manually.");
+      try {
+        payload = await response.json();
+      } catch {
+        throw new Error(
+          "The server returned an unreadable response. Please try again."
+        );
+      }
 
-      $("locationInput").value = city;
-      await analyze(city);
+      if (!response.ok) {
+        throw new Error(
+          payload.detail ||
+          payload.error ||
+          `Request failed (${response.status}).`
+        );
+      }
+
+      renderData(payload);
+      setStatus(`Showing weather and air-quality data for ${location}.`);
     } catch (error) {
-      showStatus(error.message || "Location lookup failed.", "error");
-    }
-  }, () => {
-    showStatus("Location permission denied or unavailable. Enter a city instead.", "error");
-  }, { timeout: 12000, maximumAge: 300000 });
-});
+      console.error("AIROCAST analysis error:", error);
 
-window.addEventListener("DOMContentLoaded", () => {
-  analyze($("locationInput").value || "Hyderabad");
-});
+      setStatus(
+        `${error.message || "Could not load data."} Check that the Render backend is awake and try again.`,
+        true
+      );
+    } finally {
+      button.disabled = false;
+      button.innerHTML = 'Analyze air <span aria-hidden="true">↗</span>';
+    }
+  }
+
+  const form = $("searchForm");
+
+  if (form) {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+
+      const location = $("locationInput")?.value.trim();
+
+      if (!location) {
+        setStatus("Enter a city name first.", true);
+        return;
+      }
+
+      analyze(location);
+    });
+  }
+
+  const currentLocationButton = $("currentLocationBtn");
+
+  if (currentLocationButton) {
+    currentLocationButton.addEventListener("click", () => {
+      if (!navigator.geolocation) {
+        setStatus(
+          "Location is not supported by this browser. Enter a city instead.",
+          true
+        );
+        return;
+      }
+
+      setStatus("Finding your location…");
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setStatus(
+            `Coordinates found (${position.coords.latitude.toFixed(2)}, ${position.coords.longitude.toFixed(2)}), but this API needs a city name. Please enter your city above.`,
+            true
+          );
+        },
+        () => {
+          setStatus(
+            "Location permission was unavailable. Enter a city name instead.",
+            true
+          );
+        },
+        {
+          enableHighAccuracy: false,
+          timeout: 8000,
+          maximumAge: 300000
+        }
+      );
+    });
+  }
+
+  // Load Hyderabad by default when the page opens.
+  function startApp() {
+    const input = $("locationInput");
+    if (input) analyze(input.value.trim() || "Hyderabad");
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startApp, { once: true });
+  } else {
+    startApp();
+  }
+})();
+
