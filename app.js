@@ -1,4 +1,3 @@
-
 (() => {
   "use strict";
 
@@ -59,7 +58,13 @@
     if (d.includes("snow")) return "❄";
     if (d.includes("rain") || d.includes("drizzle")) return "☂";
     if (d.includes("cloud")) return "☁";
-    if (d.includes("mist") || d.includes("fog") || d.includes("haze")) return "≋";
+    if (
+      d.includes("mist") ||
+      d.includes("fog") ||
+      d.includes("haze")
+    ) {
+      return "≋";
+    }
     if (Number(code) === 800 || d.includes("clear")) return "☀";
 
     return "◌";
@@ -99,19 +104,21 @@
       type: "line",
       data: {
         labels,
-        datasets: [{
-          label: "PM2.5",
-          data: values,
-          borderColor: "#9bf2c0",
-          backgroundColor: "rgba(155,242,192,0.10)",
-          borderWidth: 2.5,
-          pointRadius: 0,
-          pointHoverRadius: 4,
-          pointBackgroundColor: "#9bf2c0",
-          fill: true,
-          tension: 0.36,
-          spanGaps: true
-        }]
+        datasets: [
+          {
+            label: "PM2.5",
+            data: values,
+            borderColor: "#9bf2c0",
+            backgroundColor: "rgba(155,242,192,0.10)",
+            borderWidth: 2.5,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            pointBackgroundColor: "#9bf2c0",
+            fill: true,
+            tension: 0.36,
+            spanGaps: true
+          }
+        ]
       },
       options: {
         responsive: true,
@@ -145,7 +152,9 @@
           },
           y: {
             beginAtZero: true,
-            grid: { color: "rgba(177,220,195,0.08)" },
+            grid: {
+              color: "rgba(177,220,195,0.08)"
+            },
             ticks: {
               color: "#789382",
               font: { size: 10 },
@@ -174,7 +183,8 @@
       }
 
       if (changeEl) {
-        changeEl.textContent = "No short-term forecast data returned";
+        changeEl.textContent =
+          "No short-term forecast data returned";
       }
       return;
     }
@@ -288,7 +298,9 @@
     setText("aqiFoot", status);
 
     const badge = $("aqiBadge");
-    if (badge) badge.dataset.level = aqiLevel(aqi, pollution.aqi_status);
+    if (badge) {
+      badge.dataset.level = aqiLevel(aqi, pollution.aqi_status);
+    }
 
     setText("temperature", number(weather.temperature));
     setText("feelsLike", `Feels like ${number(weather.feels_like)}°C`);
@@ -345,14 +357,19 @@
       60
     );
 
-    $("dashboard").hidden = false;
-    $("dashboard").scrollIntoView({
-      behavior: "smooth",
-      block: "start"
-    });
+    const dashboard = $("dashboard");
+
+    if (dashboard) {
+      dashboard.hidden = false;
+      dashboard.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    }
   }
 
-  async function analyze(location) {
+  // Analyze a city name OR the user's GPS coordinates.
+  async function analyze(location, coordinates = null) {
     const button = $("analyzeBtn");
 
     if (!button) {
@@ -363,11 +380,23 @@
     button.disabled = true;
     button.textContent = "Analyzing…";
 
-    setStatus(`Getting current conditions for ${location}…`);
+    setStatus(
+      coordinates
+        ? "Getting weather and air quality for your current location…"
+        : `Getting current conditions for ${location}…`
+    );
 
     try {
-      const url =
-        `${API_BASE}/api/analyze?location=${encodeURIComponent(location)}`;
+      const params = new URLSearchParams();
+
+      if (coordinates) {
+        params.set("latitude", String(coordinates.latitude));
+        params.set("longitude", String(coordinates.longitude));
+      } else {
+        params.set("location", location);
+      }
+
+      const url = `${API_BASE}/api/analyze?${params.toString()}`;
 
       const response = await fetch(url, {
         headers: { Accept: "application/json" }
@@ -386,13 +415,21 @@
       if (!response.ok) {
         throw new Error(
           payload.detail ||
-          payload.error ||
-          `Request failed (${response.status}).`
+            payload.error ||
+            `Request failed (${response.status}).`
         );
       }
 
       renderData(payload);
-      setStatus(`Showing weather and air-quality data for ${location}.`);
+
+      const placeName =
+        payload.location?.name ||
+        location ||
+        "your current location";
+
+      setStatus(
+        `Showing weather and air-quality data for ${placeName}.`
+      );
     } catch (error) {
       console.error("AIROCAST analysis error:", error);
 
@@ -402,10 +439,12 @@
       );
     } finally {
       button.disabled = false;
-      button.innerHTML = 'Analyze air <span aria-hidden="true">↗</span>';
+      button.innerHTML =
+        'Analyze air <span aria-hidden="true">↗</span>';
     }
   }
 
+  // City search form.
   const form = $("searchForm");
 
   if (form) {
@@ -423,6 +462,7 @@
     });
   }
 
+  // Current Location GPS button.
   const currentLocationButton = $("currentLocationBtn");
 
   if (currentLocationButton) {
@@ -439,16 +479,29 @@
 
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          setStatus(
-            `Coordinates found (${position.coords.latitude.toFixed(2)}, ${position.coords.longitude.toFixed(2)}), but this API needs a city name. Please enter your city above.`,
-            true
-          );
+          const latitude = position.coords.latitude;
+          const longitude = position.coords.longitude;
+
+          // Show that GPS is being used in the search field.
+          const input = $("locationInput");
+          if (input) input.value = "Current location";
+
+          // Send GPS coordinates to the backend.
+          analyze("", { latitude, longitude });
         },
-        () => {
-          setStatus(
-            "Location permission was unavailable. Enter a city name instead.",
-            true
-          );
+        (error) => {
+          let message =
+            "Location permission was unavailable. Enter a city name instead.";
+
+          if (error?.code === 1) {
+            message =
+              "Location permission was denied. Allow location access in your browser or enter a city name.";
+          } else if (error?.code === 3) {
+            message =
+              "Location request timed out. Please try again or enter a city name.";
+          }
+
+          setStatus(message, true);
         },
         {
           enableHighAccuracy: false,
@@ -462,13 +515,17 @@
   // Load Hyderabad by default when the page opens.
   function startApp() {
     const input = $("locationInput");
-    if (input) analyze(input.value.trim() || "Hyderabad");
+
+    if (input) {
+      analyze(input.value.trim() || "Hyderabad");
+    }
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", startApp, { once: true });
+    document.addEventListener("DOMContentLoaded", startApp, {
+      once: true
+    });
   } else {
     startApp();
   }
 })();
-
