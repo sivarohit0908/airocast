@@ -115,6 +115,131 @@ async def health():
     return {"status": "ok"}
 
 
+
+OPENAQ_URL = "https://api.openaq.org/v3/locations"
+
+
+@app.get("/api/stations")
+async def nearby_stations(
+    latitude: float = Query(..., ge=-90, le=90),
+    longitude: float = Query(..., ge=-180, le=180),
+    radius: int = Query(25000, ge=1000, le=25000),
+):
+    """
+    Return nearby OpenAQ monitoring stations with their latest PM2.5 readings.
+    These are observed station readings, separate from the Open-Meteo model forecast.
+    """
+    api_key = os.getenv("OPENAQ_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="OpenAQ is not configured. Add OPENAQ_API_KEY in Render environment variables.",
+        )
+
+    headers = {"X-API-Key": api_key, "Accept": "application/json"}
+
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            response = await client.get(
+                OPENAQ_URL,
+                params={
+                    "coordinates": f"{latitude},{longitude}",
+                    "radius": radius,
+                    "limit": 100,
+                    "page": 1,
+                },
+                headers=headers,
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+            candidates = []
+            for location_item in payload.get("results") or []:
+                sensors = location_item.get("sensors") or []
+                pm25_sensor_ids = [
+                    sensor.get("id")
+                    for sensor in sensors
+                    if str((sensor.get("parameter") or {}).get("name", "")).lower()
+                    in {"pm25", "pm2.5", "pm_2_5"}
+                    and sensor.get("id") is not None
+                ]
+                if pm25_sensor_ids:
+                    candidates.append((location_item, set(pm25_sensor_ids)))
+
+            async def fetch_station_latest(location_item, sensor_ids):
+                latest_response = await client.get(
+                    f"{OPENAQ_URL}/{location_item['id']}/latest",
+                    params={"limit": 100, "page": 1},
+                    headers=headers,
+                )
+                latest_response.raise_for_status()
+                latest_payload = latest_response.json()
+
+                readings = []
+                for reading in latest_payload.get("results") or []:
+                    if reading.get("sensorsId") in sensor_ids:
+                        readings.append({
+                            "value": reading.get("value"),
+                            "datetime": (reading.get("datetime") or {}).get("utc"),
+                            "latitude": (reading.get("coordinates") or {}).get("latitude"),
+                            "longitude": (reading.get("coordinates") or {}).get("longitude"),
+                        })
+
+                if not readings:
+                    return None
+
+                coords = location_item.get("coordinates") or {}
+                return {
+                    "id": location_item.get("id"),
+                    "name": location_item.get("name") or "Unnamed monitoring station",
+                    "locality": location_item.get("locality"),
+                    "latitude": coords.get("latitude"),
+                    "longitude": coords.get("longitude"),
+                    "distance_m": location_item.get("distance"),
+                    "pm2_5_readings": readings,
+                    "source": "OpenAQ monitoring station",
+                }
+
+            tasks = [
+                fetch_station_latest(item, sensor_ids)
+                for item, sensor_ids in candidates[:12]
+            ]
+            station_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        stations = [
+            item for item in station_results
+            if isinstance(item, dict) and item.get("pm2_5_readings")
+        ]
+        return {
+            "source": "OpenAQ",
+            "measurement_type": "observed station readings",
+            "radius_m": radius,
+            "stations_found": len(stations),
+            "stations": stations,
+            "note": (
+                "Station readings are direct reported measurements. "
+                "Coverage and update times vary by station; check each reading timestamp. "
+                "They are not the same as the global model-based forecast."
+            ),
+        }
+
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (401, 403):
+            raise HTTPException(
+                status_code=503,
+                detail="OpenAQ rejected the API key. Check OPENAQ_API_KEY in Render.",
+            ) from exc
+        raise HTTPException(
+            status_code=502,
+            detail="OpenAQ returned an error. Please try again shortly.",
+        ) from exc
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not retrieve nearby monitoring stations from OpenAQ.",
+        ) from exc
+
+
 @app.get("/api/analyze")
 async def analyze(
     location: Optional[str] = Query(None, min_length=2, max_length=100),
